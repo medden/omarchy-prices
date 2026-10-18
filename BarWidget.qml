@@ -8,8 +8,9 @@ import "Model.js" as Model
 // endpoint; FX from Frankfurter (ECB reference rates, updated each business
 // day), fetched once against EUR so any pair can be crossed locally.
 //
-// Left click refreshes, scroll steps through tickers when rotating, and the
-// tooltip carries full prices with 24h change.
+// Left click opens the chart popup (on the ticker showing, when rotating),
+// middle click refreshes, scroll steps through tickers when rotating, and
+// the tooltip carries full prices with 24h change.
 BarWidget {
   id: root
   moduleName: "io.github.medden.prices"
@@ -24,6 +25,7 @@ BarWidget {
   property var fxRows: []
   property int rotateIndex: 0
   property bool stale: false
+  property int retries: 0
 
   readonly property var rows: cryptoRows.concat(fxRows)
   readonly property string displayText: {
@@ -55,11 +57,59 @@ BarWidget {
     }
   }
 
+  // CoinGecko's free tier rate limits by IP, so a failed fetch is retried
+  // after a minute (a few times) rather than waiting out the refresh interval.
+  function fetchFailed() {
+    stale = true
+    if (retries < 3) {
+      retries++
+      retryTimer.restart()
+    }
+  }
+
   function step(delta) {
     if (rows.length === 0) return
     rotateIndex = (rotateIndex + delta + rows.length) % rows.length
     if (rotateSeconds > 0) rotateTimer.restart()
   }
+
+  // ---- Chart popup. Shape contract for shell.summon/hide/toggle routing:
+  //      Bar.findPanelWidget requires open/close/opened on the widget root.
+  readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
+
+  function open() {
+    if (panelLoader.item) panelLoader.item.openOn(rotateSeconds > 0 ? rotateIndex % Math.max(1, rows.length) : -1)
+  }
+
+  function close() {
+    if (panelLoader.item) panelLoader.item.close()
+  }
+
+  function togglePanel() {
+    if (opened) close()
+    else open()
+  }
+
+  // Forwarded so this widget can stand in for the panel as the bar's popout
+  // identity: Bar.requestPopout prefers closeForPopoutSwitch over close, and
+  // KeyboardPanel reads popoutSwitchClosing back off its owner.
+  readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing === true : false
+
+  function closeForPopoutSwitch() {
+    if (panelLoader.item) panelLoader.item.closeForPopoutSwitch()
+  }
+
+  function injectPanel() {
+    var target = panelLoader.item
+    if (!target) return
+    target.bar = root.bar
+    target.settings = root.settings
+    target.anchorItem = button
+    target.hostWidget = root
+  }
+
+  onBarChanged: injectPanel()
+  onSettingsChanged: injectPanel()
 
   onCryptoIdsChanged: Qt.callLater(refresh)
   onVsCurrencyChanged: Qt.callLater(refresh)
@@ -69,6 +119,31 @@ BarWidget {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
+  Loader {
+    id: panelLoader
+    active: true
+    source: Qt.resolvedUrl("ChartPanel.qml")
+    visible: false
+    onLoaded: {
+      root.injectPanel()
+      Qt.callLater(root.injectPanel)
+    }
+  }
+
+  Binding {
+    target: panelLoader.item
+    property: "rows"
+    value: root.rows
+    when: panelLoader.item !== null
+  }
+
+  Binding {
+    target: panelLoader.item
+    property: "vsCurrency"
+    value: root.vsCurrency
+    when: panelLoader.item !== null
+  }
+
   Process {
     id: cryptoProc
     stdout: StdioCollector {
@@ -76,7 +151,7 @@ BarWidget {
       onStreamFinished: {
         var parsed = Model.parseCrypto(text, root.cryptoIds, root.vsCurrency)
         if (parsed && parsed.length > 0) root.cryptoRows = parsed
-        else root.stale = true
+        else root.fetchFailed()
       }
     }
   }
@@ -89,7 +164,7 @@ BarWidget {
       onStreamFinished: {
         var parsed = Model.parseFx(text, root.fxPairs)
         if (parsed && parsed.length > 0) root.fxRows = parsed
-        else root.stale = true
+        else root.fetchFailed()
       }
     }
   }
@@ -99,6 +174,15 @@ BarWidget {
     running: true
     repeat: true
     triggeredOnStart: true
+    onTriggered: {
+      root.retries = 0
+      root.refresh()
+    }
+  }
+
+  Timer {
+    id: retryTimer
+    interval: 60 * 1000
     onTriggered: root.refresh()
   }
 
@@ -114,6 +198,9 @@ BarWidget {
     target: "io.github.medden.prices"
 
     function refresh(): void { root.broadcast("refresh") }
+    function open(): void { root.open() }
+    function close(): void { root.close() }
+    function toggle(): void { root.togglePanel() }
   }
 
   WidgetButton {
@@ -127,7 +214,8 @@ BarWidget {
     horizontalMargin: 8.75
 
     onPressed: function(b) {
-      if (b === Qt.LeftButton) root.refresh()
+      if (b === Qt.MiddleButton) root.refresh()
+      else if (b === Qt.LeftButton) root.togglePanel()
     }
     onWheelMoved: function(delta) {
       if (root.rotateSeconds > 0) root.step(delta > 0 ? -1 : 1)
