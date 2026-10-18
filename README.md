@@ -16,6 +16,20 @@ No API keys needed.
 omarchy plugin add https://github.com/medden/omarchy-prices.git --enable
 ```
 
+## Remove
+
+```bash
+omarchy plugin remove io.github.medden.prices
+```
+
+This deletes the plugin folder. If the widget is still listed in `~/.config/omarchy/shell.json`, delete its entry there too.
+
+## Requirements
+
+- Omarchy with the Quickshell-based shell
+- `curl` (installed by default on Omarchy)
+- Internet access to CoinGecko (`api.coingecko.com`), Yahoo Finance (`query1.finance.yahoo.com`) and Frankfurter (`api.frankfurter.dev`). No accounts or API keys.
+
 ## Usage
 
 | Action | Result |
