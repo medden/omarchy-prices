@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.medden.prices",
+  "name": "Prices",
+  "version": "0.1.0",
+  "author": "medden",
+  "license": "MIT",
+  "description": "FX rates (Frankfurter/ECB) and crypto prices (CoinGecko) in the bar",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Prices",
+    "description": "FX and crypto tickers with 24h change in the tooltip",
+    "category": "Info",
+    "allowMultiple": true,
+    "defaultSection": "right",
+    "defaults": {
+      "crypto": "bitcoin,ethereum",
+      "vsCurrency": "usd",
+      "fxPairs": "EUR/USD,GBP/USD",
+      "refreshMinutes": 5,
+      "rotateSeconds": 0
+    },
+    "schema": [
+      { "key": "crypto", "type": "string", "label": "Crypto (CoinGecko ids)", "defaultValue": "bitcoin,ethereum", "description": "Comma-separated CoinGecko ids, e.g. bitcoin,ethereum,solana. Empty hides crypto." },
+      { "key": "vsCurrency", "type": "string", "label": "Crypto quote currency", "defaultValue": "usd" },
+      { "key": "fxPairs", "type": "string", "label": "FX pairs", "defaultValue": "EUR/USD,GBP/USD", "description": "Comma-separated BASE/QUOTE pairs, e.g. EUR/USD,USD/JPY. Empty hides FX." },
+      { "key": "refreshMinutes", "type": "integer", "label": "Refresh interval (minutes)", "min": 1, "max": 120, "step": 1, "defaultValue": 5 },
+      { "key": "rotateSeconds", "type": "integer", "label": "Rotate tickers (seconds, 0 = show all)", "min": 0, "max": 120, "step": 1, "defaultValue": 0 }
+    ]
+  }
+}
