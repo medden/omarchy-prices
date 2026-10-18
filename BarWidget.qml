@@ -5,12 +5,13 @@ import qs.Ui
 import "Model.js" as Model
 
 // FX and crypto tickers. Crypto comes from CoinGecko's keyless /simple/price
-// endpoint; FX from Frankfurter (ECB reference rates, updated each business
-// day), fetched once against EUR so any pair can be crossed locally.
+// endpoint. FX comes live from Yahoo Finance, falling back per pair to
+// Frankfurter (ECB reference rates, updated each business day, fetched once
+// against EUR so any pair can be crossed locally) when Yahoo has no quote.
 //
 // Left click opens the chart popup (on the ticker showing, when rotating),
 // middle click refreshes, scroll steps through tickers when rotating, and
-// the tooltip carries full prices with 24h change.
+// the tooltip carries full prices, changes, and where each FX rate came from.
 BarWidget {
   id: root
   moduleName: "io.github.medden.prices"
@@ -22,11 +23,19 @@ BarWidget {
   readonly property int rotateSeconds: Math.max(0, parseInt(setting("rotateSeconds", 0), 10) || 0)
 
   property var cryptoRows: []
-  property var fxRows: []
+  property var ecbRows: []
+  property var yahooQuotes: ({})
+  // Reference time for deciding whether a Yahoo quote is too old to show;
+  // bumped whenever FX data lands so the merge re-evaluates.
+  property real fxClock: Date.now()
   property int rotateIndex: 0
   property bool stale: false
   property int retries: 0
 
+  // A Yahoo quote outlives a few failed refreshes before the ECB rate
+  // takes over.
+  readonly property real yahooMaxAgeMs: Math.max(30, refreshMinutes * 3) * 60 * 1000
+  readonly property var fxRows: Model.mergeFx(fxPairs, yahooQuotes, ecbRows, fxClock, yahooMaxAgeMs)
   readonly property var rows: cryptoRows.concat(fxRows)
   readonly property string displayText: {
     if (rows.length === 0) return stale ? "prices ?" : ""
@@ -35,7 +44,6 @@ BarWidget {
   }
   readonly property string tooltip: {
     var lines = rows.map(Model.tooltipLine)
-    if (fxRows.length > 0 && fxRows[0].date) lines.push("FX as of " + fxRows[0].date + " (ECB)")
     if (stale) lines.push("Last refresh failed; showing previous values")
     return lines.join("\n")
   }
@@ -51,9 +59,12 @@ BarWidget {
       cryptoRows = []
     }
     if (fxPairs.length > 0) {
+      yahooProc.command = Model.yahooQuoteCommand(fxPairs)
+      yahooProc.running = true
       fxProc.running = true
     } else {
-      fxRows = []
+      ecbRows = []
+      yahooQuotes = ({})
     }
   }
 
@@ -163,8 +174,26 @@ BarWidget {
       waitForEnd: true
       onStreamFinished: {
         var parsed = Model.parseFx(text, root.fxPairs)
-        if (parsed && parsed.length > 0) root.fxRows = parsed
+        root.fxClock = Date.now()
+        if (parsed && parsed.length > 0) root.ecbRows = parsed
         else root.fetchFailed()
+      }
+    }
+  }
+
+  // No retry on a Yahoo failure: the ECB rate covers the pair until the
+  // next refresh.
+  Process {
+    id: yahooProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var now = Date.now()
+        var quotes = Model.parseYahooQuotes(text, now)
+        var merged = Object.assign({}, root.yahooQuotes)
+        for (var symbol in quotes) merged[symbol] = quotes[symbol]
+        root.fxClock = now
+        root.yahooQuotes = merged
       }
     }
   }

@@ -34,7 +34,8 @@ function cryptoSymbol(id) {
 function formatPrice(value) {
   var n = Number(value)
   if (!isFinite(n)) return "?"
-  var digits = n >= 1000 ? 0 : n >= 100 ? 2 : n >= 1 ? 4 : 6
+  if (n < 1) return n.toPrecision(4)
+  var digits = n >= 1000 ? 0 : n >= 100 ? 2 : 4
   var fixed = n.toFixed(digits)
   if (n < 1000) return fixed
   return fixed.replace(/\B(?=(\d{3})+(?!\d))/g, ",")
@@ -84,15 +85,85 @@ function parseFx(raw, pairs) {
   return rows
 }
 
+// ---- Live FX. Yahoo Finance first, ECB fixings as the fallback for any
+// pair Yahoo doesn't answer.
+
+function yahooSymbol(pair) {
+  return pair.base + pair.quote + "=X"
+}
+
+// One curl for every pair: each response is one line of JSON, and a pair
+// Yahoo rejects just prints nothing, so responses are matched by symbol.
+function yahooQuoteCommand(pairs) {
+  var argv = ["curl", "-sS", "-f", "--max-time", "10", "-A", "Mozilla/5.0", "-w", "\\n"]
+  pairs.forEach(function(p) {
+    argv.push("https://query1.finance.yahoo.com/v8/finance/chart/" + yahooSymbol(p) + "?range=1d&interval=1d")
+  })
+  return argv
+}
+
+// Yahoo chart responses, one per line -> { "EURUSD=X": { price, change, time } }.
+function parseYahooQuotes(raw, fetchedAt) {
+  var quotes = {}
+  String(raw || "").split("\n").forEach(function(line) {
+    if (line.replace(/\s+/g, "") === "") return
+    try {
+      var result = JSON.parse(line).chart.result[0]
+      var meta = result.meta
+      var price = Number(meta.regularMarketPrice)
+      if (!meta.symbol || !isFinite(price) || price <= 0) return
+      // Yahoo answers USD-based pairs under the short name: USDJPY=X comes
+      // back as JPY=X.
+      var symbol = String(meta.symbol).toUpperCase()
+      if (/^[A-Z]{3}=X$/.test(symbol)) symbol = "USD" + symbol
+      quotes[symbol] = {
+        price: price,
+        change: meta.regularMarketChangePercent,
+        time: Number(meta.regularMarketTime) * 1000,
+        fetchedAt: fetchedAt
+      }
+    } catch (e) {}
+  })
+  return quotes
+}
+
+// Configured pairs -> bar rows: a Yahoo quote fetched within `maxAgeMs` wins,
+// otherwise the ECB row for the pair, otherwise the pair is left out.
+function mergeFx(pairs, yahooQuotes, ecbRows, nowMs, maxAgeMs) {
+  var ecb = {}
+  ;(ecbRows || []).forEach(function(r) { ecb[r.label] = r })
+  var rows = []
+  pairs.forEach(function(p) {
+    var label = p.base + "/" + p.quote
+    var q = yahooQuotes ? yahooQuotes[yahooSymbol(p)] : null
+    if (q && nowMs - q.fetchedAt <= maxAgeMs) {
+      rows.push({ kind: "fx", base: p.base, quote: p.quote, label: label, price: q.price,
+        changeDay: q.change, source: "Yahoo", time: q.time })
+    } else if (ecb[label]) {
+      var r = ecb[label]
+      rows.push({ kind: "fx", base: p.base, quote: p.quote, label: label, price: r.price,
+        source: "ECB", date: r.date })
+    }
+  })
+  return rows
+}
+
 function barText(row) {
   return row.label + " " + formatPrice(row.price)
 }
 
 function tooltipLine(row) {
   var line = row.label + "  " + formatPrice(row.price)
-  if (row.quote) line += " " + row.quote
+  if (row.kind === "crypto") line += " " + row.quote
   var change = formatChange(row.change)
   if (change) line += "  " + change + " 24h"
+  var dayChange = formatChange(row.changeDay)
+  if (dayChange) line += "  " + dayChange + " day"
+  if (row.source === "Yahoo" && row.time) {
+    line += "  (Yahoo " + shortStamp(row.time, Date.now()) + ")"
+  } else if (row.source === "ECB") {
+    line += "  (ECB " + row.date + ")"
+  }
   return line
 }
 
@@ -171,6 +242,15 @@ function nearestIndex(points, x, width) {
 
 function pad2(n) { return (n < 10 ? "0" : "") + n }
 
+// "14:05" for today, "Fri 16 21:55" for anything older.
+function shortStamp(ms, nowMs) {
+  var d = new Date(ms)
+  var time = pad2(d.getHours()) + ":" + pad2(d.getMinutes())
+  if (new Date(nowMs).toDateString() === d.toDateString()) return time
+  var days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+  return days[d.getDay()] + " " + d.getDate() + " " + time
+}
+
 function formatChartTime(ms, range) {
   var d = new Date(ms)
   var time = pad2(d.getHours()) + ":" + pad2(d.getMinutes())
@@ -204,6 +284,10 @@ if (typeof module !== "undefined") {
     formatChange: formatChange,
     parseCrypto: parseCrypto,
     parseFx: parseFx,
+    yahooSymbol: yahooSymbol,
+    yahooQuoteCommand: yahooQuoteCommand,
+    parseYahooQuotes: parseYahooQuotes,
+    mergeFx: mergeFx,
     barText: barText,
     CHART_RANGES: CHART_RANGES,
     chartCommand: chartCommand,

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.medden.prices",
   "name": "Prices",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "medden",
   "license": "MIT",
   "description": "FX rates and crypto prices in the bar, with a click-to-open price chart",
